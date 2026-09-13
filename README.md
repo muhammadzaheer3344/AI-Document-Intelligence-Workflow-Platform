@@ -9,29 +9,31 @@ reporting.
 ## Project Structure
 
 ```
-zyroo_week3/
+AI-Document-Intelligence-Workflow-Platform/
 ├── app.py                        # Streamlit app (entry point)
+├── requirements.txt
+├── packages.txt                  # System-level apt dependencies for Streamlit Cloud
 ├── src/
 │   ├── extract_text.py           # PDF text extraction + OCR fallback + image preprocessing
-│   ├── preprocess.py              # Text cleaning / normalization
-│   ├── classifier.py              # Rule-based baseline + ML model wrapper (inference time)
-│   └── field_extraction.py        # Regex/keyword field extraction, "Not Found" handling
+│   ├── preprocess.py             # Text cleaning / normalization
+│   ├── classifier.py             # Rule-based baseline + ML model wrapper (inference time)
+│   └── field_extraction.py       # Regex/keyword field extraction, "Not Found" handling
 ├── data/
-│   ├── generate_dataset.py        # Builds a balanced synthetic Invoice/Resume/Other dataset
-│   └── dataset.csv                # Generated training data (text, label)
+│   ├── generate_dataset.py       # Builds a balanced synthetic Invoice/Resume/Other dataset
+│   └── dataset.csv               # Training data (text, label)
 ├── models/
-│   ├── train_classifier.py        # Trains + compares LogReg/SVM/NaiveBayes, saves best model
-│   ├── best_model.joblib          # Trained classifier (generated)
-│   ├── tfidf_vectorizer.joblib     # Fitted TF-IDF vectorizer (generated)
-│   ├── model_metadata.json        # Which model won, labels, split sizes (generated)
-│   ├── evaluation_report.json     # Full accuracy/precision/recall/F1 + confusion matrix (generated)
-│   ├── confusion_matrix.png        # Confusion matrix plot (generated)
-│   └── model_comparison.png       # Bar chart comparing candidate models (generated)
+│   ├── train_classifier.py       # Trains + compares LogReg/SVM/NaiveBayes, saves best model
+│   ├── best_model.joblib         # Trained classifier
+│   ├── tfidf_vectorizer.joblib   # Fitted TF-IDF vectorizer
+│   ├── model_metadata.json       # Best model name, labels, split sizes
+│   ├── evaluation_report.json    # Full accuracy/precision/recall/F1 + confusion matrix
+│   ├── confusion_matrix.png      # Confusion matrix plot
+│   └── model_comparison.png      # Bar chart comparing candidate models
 ├── tests/
-│   └── generate_sample_docs.py    # Creates native PDFs, scanned images, blank/corrupt files for testing
-├── sample_docs/                   # Generated test fixtures (see above)
-├── requirements.txt
-└── README.md
+│   ├── generate_sample_docs.py   # Creates native PDFs, scanned images, blank/corrupt files
+│   ├── sanity_check.py           # End-to-end pipeline check on a native PDF
+│   └── ocr_test.py               # End-to-end pipeline check on a scanned image
+└── sample_docs/                  # Test fixtures (native PDFs, scans, blank, corrupt)
 ```
 
 ## Setup
@@ -63,19 +65,6 @@ streamlit run app.py
 
 The app has two tabs: **Upload & Process** (the actual pipeline) and **Model Evaluation**
 (accuracy/precision/recall/F1 + confusion matrix + model comparison chart from step 2).
-
-## ⚠️ Important — read before submitting
-
-`data/generate_dataset.py` builds a **synthetic** dataset from templates so the whole
-pipeline has something to train/evaluate on immediately. On this synthetic data the
-classifier scores ~100% — that's the templates being too easy to tell apart, not a sign
-the model is production-ready. **Before submitting, replace or supplement `data/dataset.csv`
-with real invoices/resumes/other documents you collect** (10-20 per class is enough to see
-a more realistic, imperfect evaluation report — which is actually what Step 6 wants to see:
-a model that makes *some* mistakes, with a confusion matrix showing what it confuses).
-
-To use your own data: put real files' extracted text into `data/dataset.csv` with the same
-`text,label` columns (label ∈ Invoice/Resume/Other), then re-run `train_classifier.py`.
 
 ## What changed from Week 2 → Week 3
 
