@@ -1,0 +1,10 @@
+{
+  "best_model": "logistic_regression",
+  "labels": [
+    "Invoice",
+    "Other",
+    "Resume"
+  ],
+  "test_size": 45,
+  "train_size": 135
+}
