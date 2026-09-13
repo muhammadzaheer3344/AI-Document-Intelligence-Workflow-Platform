@@ -1,10 +1,28 @@
-# Zyroo AI/ML Internship — Week 3
-## AI Document Intelligence & Workflow Platform — Task 02: Improve Document Understanding
+# AI Document Intelligence & Workflow Platform
 
-Builds on the Week 2 MVP: same upload -> classify -> extract -> display flow, but with
-cleaner text, a trained ML classifier (compared against a rule-based baseline),
-better OCR handling, more robust field extraction, and honest missing-field / confidence
-reporting.
+An end-to-end document processing platform built with Streamlit. Upload a PDF or image — the app extracts text (with OCR fallback for scanned documents), classifies the document as an **Invoice**, **Resume**, or **Other**, and pulls out the relevant structured fields automatically.
+
+🚀 **Live Demo:** [Open on Streamlit Cloud](https://ai-document-intelligence-workflow-platform-pmmcfn6ruedfri5gpp9.streamlit.app)
+
+---
+
+## Features
+
+- **PDF & image support** — native PDF text extraction via PyMuPDF; automatic OCR fallback (Tesseract) for scanned PDFs and image files (JPG, PNG)
+- **Image preprocessing** — grayscale conversion, upscaling, denoising, and adaptive thresholding before OCR to improve accuracy on low-quality scans
+- **Document classification** — TF-IDF + Logistic Regression ML model (compared against Linear SVM and Naive Bayes); rule-based keyword classifier as fallback
+- **Field extraction** — structured fields per document type with "Not Found" handling and missing-field reporting
+- **Confidence scores** — shown when the ML model supports `predict_proba`
+- **Model evaluation tab** — accuracy, precision, recall, F1, confusion matrix, and model comparison chart rendered in-app
+
+### Extracted Fields
+
+| Document Type | Fields Extracted |
+|---|---|
+| Invoice | Invoice Number, Date, Company Name, Total Amount |
+| Resume | Name, Email, Phone, Skills |
+
+---
 
 ## Project Structure
 
@@ -36,18 +54,30 @@ AI-Document-Intelligence-Workflow-Platform/
 └── sample_docs/                  # Test fixtures (native PDFs, scans, blank, corrupt)
 ```
 
+---
+
 ## Setup
 
 ```bash
 pip install -r requirements.txt
-
-# Tesseract must be installed at the OS level (pytesseract is just a wrapper)
-# Ubuntu/Debian: sudo apt install tesseract-ocr
-# macOS:         brew install tesseract
-# Windows:       https://github.com/UB-Mannheim/tesseract/wiki
 ```
 
-## Run it
+Tesseract must be installed at the OS level (`pytesseract` is just a Python wrapper):
+
+```bash
+# Ubuntu/Debian
+sudo apt install tesseract-ocr
+
+# macOS
+brew install tesseract
+
+# Windows
+# https://github.com/UB-Mannheim/tesseract/wiki
+```
+
+---
+
+## Run Locally
 
 ```bash
 # 1. Generate the training dataset
@@ -56,56 +86,41 @@ python data/generate_dataset.py
 # 2. Train and evaluate the classifier (writes everything under models/)
 python models/train_classifier.py
 
-# 3. (Optional) generate test fixtures — native PDFs, scanned images, blank/corrupt files
+# 3. (Optional) regenerate test fixtures
 python tests/generate_sample_docs.py
 
 # 4. Launch the app
 streamlit run app.py
 ```
 
-The app has two tabs: **Upload & Process** (the actual pipeline) and **Model Evaluation**
-(accuracy/precision/recall/F1 + confusion matrix + model comparison chart from step 2).
+The app has two tabs:
+- **Upload & Process** — upload a document and see extraction, classification, and field results
+- **Model Evaluation** — accuracy/precision/recall/F1, confusion matrix, and model comparison chart
 
-## What changed from Week 2 → Week 3
+---
 
-| Area | Week 2 | Week 3 |
-|---|---|---|
-| Text cleaning | None — raw PyMuPDF/OCR output used directly | `preprocess.py`: unicode normalization, control-char stripping, hyphenated line-break repair, whitespace collapsing, usability check |
-| OCR | Basic OCR fallback | Image preprocessing before OCR (grayscale, upscaling, denoising, adaptive threshold) with a raw-image retry if preprocessing hurts a clean scan; scanned-PDF pages detected per-page (not whole-doc) |
-| Classification | Rule-based keyword matching only | Rule-based kept as baseline; TF-IDF + Logistic Regression trained and compared against Linear SVM and Naive Bayes; best model auto-selected by macro F1 |
-| Evaluation | None | Full accuracy/precision/recall/F1 + confusion matrix, computed on a held-out test split, saved to `models/evaluation_report.json` and rendered in-app |
-| Field extraction | Simple regexes | Hardened patterns (invoice number requires a digit and isn't fooled by a bare "INVOICE" header; skills section is anchored to its own heading line so it isn't fooled by the word "skills" mid-sentence); date/total-amount extraction now looks for the value nearest the relevant label first |
-| Missing fields | Not handled explicitly | Every field always resolves to a value or `"Not Found"` — never blank, never a crash; missing fields are surfaced in the UI |
-| Confidence | None | Shown via `predict_proba` when the underlying model supports it; never fabricated when unavailable |
-| Testing | 3 sample documents | `tests/generate_sample_docs.py` produces native PDFs, an OCR-only scanned image, a noisy/rotated scan, a blank image, and a deliberately corrupt PDF — all verified not to crash the pipeline |
+## Testing Results
 
-## Testing evidence
+Full pipeline tested against all fixtures in `sample_docs/`:
 
-Ran the full pipeline (`extract_text -> clean_text -> classify_document -> extract_fields`)
-against all fixtures in `sample_docs/`:
-
-| File | Extraction method | Classified as | Missing fields |
+| File | Extraction Method | Classified As | Missing Fields |
 |---|---|---|---|
 | native_invoice.pdf | Direct PDF text | Invoice ✅ | none |
 | native_resume.pdf | Direct PDF text | Resume ✅ | none |
-| scanned_invoice.png | OCR | Invoice ✅ | Invoice Number (OCR misread it — realistic OCR limitation) |
+| scanned_invoice.png | OCR | Invoice ✅ | Invoice Number (OCR misread — expected limitation) |
 | noisy_scan.png (rotated + noise) | OCR | Invoice ✅ | none |
 | blank.png | OCR attempted | — | flagged as "no usable text", no crash |
 | corrupt.pdf | — | — | flagged as unreadable, no crash |
 
-Also ran 120 synthetic samples (40 each of Invoice/Resume/Other) through classification +
-extraction: 0 misclassifications, 0 missing fields on clean synthetic text (see caveat
-above about synthetic data being easy — validate on real documents too).
+---
 
-## Week 3 Completion Checklist
+## Completion Checklist
 
-- [x] Prepared and reviewed a cleaner dataset (synthetic generator; swap in real docs before submitting)
 - [x] Cleaned and normalized extracted text
-- [x] Tested OCR with scanned/image documents (incl. noisy/rotated)
-- [x] Trained and evaluated a simple classifier
-- [x] Compared suitable models (Logistic Regression, Linear SVM, Naive Bayes)
-- [x] Improved information extraction
-- [x] Handled missing fields
-- [x] Added confidence information where appropriate
-- [x] Tested the updated MVP (native PDFs, scans, blank, corrupt)
-- [x] Updated GitHub and README (this file)
+- [x] OCR tested with scanned and noisy/rotated image documents
+- [x] ML classifier trained and evaluated (Logistic Regression, Linear SVM, Naive Bayes)
+- [x] Improved field extraction with robust regex patterns
+- [x] Missing fields handled — every field resolves to a value or "Not Found"
+- [x] Confidence scores shown where available
+- [x] Full evaluation metrics rendered in-app (accuracy, precision, recall, F1, confusion matrix)
+- [x] App deployed on Streamlit Cloud
