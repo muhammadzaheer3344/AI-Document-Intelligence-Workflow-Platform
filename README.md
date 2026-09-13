@@ -107,7 +107,7 @@ Full pipeline tested against all fixtures in `sample_docs/`:
 |---|---|---|---|
 | native_invoice.pdf | Direct PDF text | Invoice ✅ | none |
 | native_resume.pdf | Direct PDF text | Resume ✅ | none |
-| scanned_invoice.png | OCR | Invoice ✅ | Invoice Number (OCR misread — expected limitation) |
+| scanned_invoice.png | OCR | Invoice ✅ | none |
 | noisy_scan.png (rotated + noise) | OCR | Invoice ✅ | none |
 | blank.png | OCR attempted | — | flagged as "no usable text", no crash |
 | corrupt.pdf | — | — | flagged as unreadable, no crash |
