@@ -103,7 +103,8 @@ def extract_from_image_bytes(file_bytes: bytes) -> ExtractionResult:
             result.warnings.append("OCR returned almost no text — image may be blank, "
                                     "too low-resolution, or not a document.")
     except Exception as exc:  # noqa: BLE001
-        result.warnings.append(f"Could not read image file: {exc}")
+        logger.warning("Image extraction failed: %s", exc)
+        result.warnings.append("Could not read this image file. It may be corrupted or unsupported.")
     return result
 
 
@@ -117,7 +118,8 @@ def extract_from_pdf_bytes(file_bytes: bytes) -> ExtractionResult:
     try:
         doc = fitz.open(stream=file_bytes, filetype="pdf")
     except Exception as exc:  # noqa: BLE001
-        result.warnings.append(f"Could not open PDF (corrupted or unsupported): {exc}")
+        logger.warning("PDF open failed: %s", exc)
+        result.warnings.append("Could not open this PDF. It may be corrupted or unsupported.")
         return result
 
     result.page_count = doc.page_count
@@ -129,7 +131,8 @@ def extract_from_pdf_bytes(file_bytes: bytes) -> ExtractionResult:
             page_text = page.get_text("text")
         except Exception as exc:  # noqa: BLE001
             page_text = ""
-            result.warnings.append(f"Page {page_index + 1}: text extraction error ({exc})")
+            logger.warning("PDF page text extraction failed on page %s: %s", page_index + 1, exc)
+            result.warnings.append(f"Page {page_index + 1}: text extraction failed.")
 
         native_text_parts.append(page_text)
         if len(page_text.strip()) < MIN_CHARS_PER_PAGE_THRESHOLD:
@@ -160,7 +163,8 @@ def extract_from_pdf_bytes(file_bytes: bytes) -> ExtractionResult:
             pil_image = Image.open(io.BytesIO(img_bytes))
             ocr_text_parts.append(_ocr_image(pil_image))
         except Exception as exc:  # noqa: BLE001
-            result.warnings.append(f"Page {page_index + 1}: OCR render failed ({exc})")
+            logger.warning("PDF OCR render failed on page %s: %s", page_index + 1, exc)
+            result.warnings.append(f"Page {page_index + 1}: OCR could not read this page.")
 
     doc.close()
 

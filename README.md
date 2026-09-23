@@ -14,6 +14,9 @@ An end-to-end document processing platform built with Streamlit. Upload a PDF or
 - **Field extraction** — structured fields per document type with "Not Found" handling and missing-field reporting
 - **Confidence scores** — shown when the ML model supports `predict_proba`
 - **Model evaluation tab** — accuracy, precision, recall, F1, confusion matrix, and model comparison chart rendered in-app
+- **Persistent document repository** — SQLite metadata, SHA-256 duplicate detection, organized UUID-based file storage, search, filters, sorting, and detail/download view
+- **Processing status** — documents are marked `Processed`, `Needs Review`, or `Failed` based on extraction results
+- **Upload safety** — only PDF/JPG/JPEG/PNG files up to 10 MB are accepted; unreadable files are handled without exposing raw exceptions
 
 ### Extracted Fields
 
@@ -35,7 +38,8 @@ AI-Document-Intelligence-Workflow-Platform/
 │   ├── extract_text.py           # PDF text extraction + OCR fallback + image preprocessing
 │   ├── preprocess.py             # Text cleaning / normalization
 │   ├── classifier.py             # Rule-based baseline + ML model wrapper (inference time)
-│   └── field_extraction.py       # Regex/keyword field extraction, "Not Found" handling
+│   ├── field_extraction.py       # Regex/keyword field extraction, "Not Found" handling
+│   └── document_repository.py    # SQLite CRUD, SHA-256 duplicate detection, file storage
 ├── data/
 │   ├── generate_dataset.py       # Builds a balanced synthetic Invoice/Resume/Other dataset
 │   └── dataset.csv               # Training data (text, label)
@@ -50,8 +54,12 @@ AI-Document-Intelligence-Workflow-Platform/
 ├── tests/
 │   ├── generate_sample_docs.py   # Creates native PDFs, scanned images, blank/corrupt files
 │   ├── sanity_check.py           # End-to-end pipeline check on a native PDF
-│   └── ocr_test.py               # End-to-end pipeline check on a scanned image
+│   ├── ocr_test.py               # End-to-end pipeline check on a scanned image
+│   └── test_document_repository.py # Persistent repository tests
 └── sample_docs/                  # Test fixtures (native PDFs, scans, blank, corrupt)
+
+data/documents.db                 # Created automatically on first app run (ignored by git)
+storage/{invoice,resume,other}/   # UUID-named uploaded files (ignored by git)
 ```
 
 ---
@@ -91,11 +99,23 @@ python tests/generate_sample_docs.py
 
 # 4. Launch the app
 streamlit run app.py
+
+# 5. Run repository tests
+python -m unittest discover -s tests -p "test_*.py"
 ```
 
 The app has two tabs:
 - **Upload & Process** — upload a document and see extraction, classification, and field results
+- **Document Repository** — search across filename, company, invoice number, type, and text; filter by type/status/date; sort; inspect metadata; download saved files
 - **Model Evaluation** — accuracy/precision/recall/F1, confusion matrix, and model comparison chart
+
+## Week 4 Repository Details
+
+The first successful app run creates `data/documents.db` and `storage/`. Each upload is hashed with SHA-256 before processing. A matching hash shows the existing record and does not create a second file or database row. New files are given a random UUID filename while the original filename remains in SQLite.
+
+The `documents` table stores the original and stored filenames, document type, upload date, extracted invoice/company fields, file path, text preview, hash, JSON extracted fields, and processing status. `src/document_repository.py` keeps database and storage operations separate from Streamlit.
+
+Supported file types are PDF, JPG, JPEG, and PNG. The upload limit is 10 MB. Scanned PDFs and images use OCR when possible. Missing extracted fields produce `Needs Review`; unreadable files produce `Failed`.
 
 ---
 

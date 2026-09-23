@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from datetime import date
 
 import streamlit as st
 
@@ -27,11 +28,15 @@ from src.classifier import METADATA_PATH, classify_document
 from src.extract_text import extract_text
 from src.field_extraction import extract_fields, get_missing_fields
 from src.preprocess import clean_text, is_usable, normalize_for_classification
+from src.document_repository import DuplicateDocumentError, DocumentRepository
 
 ROOT = Path(__file__).resolve().parent
 MODELS_DIR = ROOT / "models"
+DB_PATH = ROOT / "data" / "documents.db"
+STORAGE_ROOT = ROOT / "storage"
 
 SUPPORTED_TYPES = ["pdf", "jpg", "jpeg", "png"]
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 st.set_page_config(page_title="Zyroo Document Intelligence", page_icon="📄", layout="wide")
 
@@ -45,6 +50,11 @@ def load_model_metadata() -> dict | None:
     if METADATA_PATH.exists():
         return json.loads(METADATA_PATH.read_text())
     return None
+
+
+@st.cache_resource
+def get_repository() -> DocumentRepository:
+    return DocumentRepository(DB_PATH, STORAGE_ROOT)
 
 
 def confidence_badge(confidence: float | None) -> str:
@@ -73,6 +83,16 @@ def render_upload_tab() -> None:
 
     file_bytes = uploaded_file.read()
     file_ext = uploaded_file.name.split(".")[-1].lower()
+    if len(file_bytes) > MAX_UPLOAD_BYTES:
+        st.error("This file is larger than the 10 MB upload limit.")
+        return
+
+    repository = get_repository()
+    existing = repository.get_by_hash(repository.hash_bytes(file_bytes))
+    if existing:
+        st.info(f"Duplicate detected. This file is already saved as document #{existing['id']}.")
+        render_document_detail(existing)
+        return
 
     with st.spinner("Reading document (extracting text, running OCR if needed)…"):
         extraction = extract_text(file_bytes, file_ext)
@@ -81,6 +101,11 @@ def render_upload_tab() -> None:
         st.error("Could not process this file.")
         for w in extraction.warnings:
             st.warning(w)
+        try:
+            repository.create_document(file_bytes=file_bytes, original_filename=uploaded_file.name,
+                                       document_type="Other", status="Failed")
+        except Exception:
+            st.error("The failed upload could not be saved to the document repository.")
         return
 
     for w in extraction.warnings:
@@ -105,12 +130,29 @@ def render_upload_tab() -> None:
         with col_right:
             st.markdown("### Extracted Text")
             st.text_area("Raw text", cleaned or "(empty)", height=150, label_visibility="collapsed")
+        try:
+            saved = repository.create_document(file_bytes=file_bytes, original_filename=uploaded_file.name,
+                                               document_type="Other", status="Needs Review",
+                                               text_preview=cleaned)
+            st.info(f"Saved as document #{saved['id']} with status Needs Review.")
+        except Exception:
+            st.error("The document could not be saved to the repository.")
         return
 
     normalized = normalize_for_classification(cleaned)
     classification = classify_document(cleaned, normalized)
     fields = extract_fields(cleaned, classification.label)
     missing = get_missing_fields(fields)
+    status = "Needs Review" if missing else "Processed"
+    try:
+        saved = repository.create_document(file_bytes=file_bytes, original_filename=uploaded_file.name,
+                                           document_type=classification.label, status=status,
+                                           fields=fields, text_preview=cleaned)
+        st.success(f"Saved as document #{saved['id']} with status {status}.")
+    except DuplicateDocumentError as duplicate:
+        st.info(f"Duplicate detected. This file is already saved as document #{duplicate.document['id']}.")
+    except Exception:
+        st.error("The document was processed but could not be saved.")
 
     with col_left:
         st.markdown("### Classification")
@@ -179,15 +221,75 @@ def render_evaluation_tab() -> None:
         st.info("Evaluation report not found — re-run training to generate it.")
 
 
+def render_document_detail(document: dict) -> None:
+    st.markdown(f"### Document #{document['id']}: {document['original_filename']}")
+    st.write(f"**Type:** {document['document_type']}  |  **Status:** {document['status']}")
+    st.write(f"**Uploaded:** {document['upload_date']}  |  **SHA-256:** `{document['file_hash']}`")
+    st.write(f"**Stored path:** `{document['file_path']}`")
+    fields = document.get("extracted_fields") or {}
+    if fields:
+        st.table({"Field": list(fields.keys()), "Value": list(fields.values())})
+    st.text_area("Text preview", document.get("text_preview") or "(empty)", height=180, disabled=True)
+    path = Path(document["file_path"])
+    if path.is_file():
+        st.download_button("Download document", path.read_bytes(), file_name=document["original_filename"])
+
+
+def render_repository_tab() -> None:
+    repository = get_repository()
+    st.subheader("Document repository")
+    col1, col2, col3 = st.columns([2, 1, 1])
+    with col1:
+        search = st.text_input("Search documents", placeholder="Filename, company, invoice number, type, or text", key="repository_search")
+    with col2:
+        document_type = st.selectbox("Document type", ["All", "Invoice", "Resume", "Other"], key="repository_type")
+    with col3:
+        status = st.selectbox("Processing status", ["All", "Processed", "Needs Review", "Failed"], key="repository_status")
+    date_col1, date_col2, date_col3 = st.columns([1, 1, 1])
+    with date_col1:
+        start_date = st.date_input("Uploaded from", value=None, key="repository_start_date")
+    with date_col2:
+        end_date = st.date_input("Uploaded to", value=None, key="repository_end_date")
+    with date_col3:
+        newest_first = st.radio("Sort", [True, False], format_func=lambda value: "Newest first" if value else "Oldest first", key="repository_sort")
+    if st.button("Clear filters"):
+        for key, value in {
+            "repository_search": "",
+            "repository_type": "All",
+            "repository_status": "All",
+            "repository_start_date": None,
+            "repository_end_date": None,
+            "repository_sort": True,
+        }.items():
+            st.session_state[key] = value
+        st.rerun()
+
+    documents = repository.list_documents(
+        search=search, document_type=document_type, status=status,
+        start_date=start_date.isoformat() if isinstance(start_date, date) else None,
+        end_date=end_date.isoformat() if isinstance(end_date, date) else None,
+        newest_first=newest_first,
+    )
+    st.caption(f"{len(documents)} saved document(s)")
+    if not documents:
+        st.info("No documents match the current filters.")
+        return
+    options = {f"#{doc['id']} · {doc['original_filename']} · {doc['status']}": doc for doc in documents}
+    selected_label = st.selectbox("Select a document", list(options))
+    render_document_detail(options[selected_label])
+
+
 def main() -> None:
     st.title("📄 Zyroo AI Document Intelligence")
     st.caption("Improved document understanding: cleaner text, more reliable "
                "classification, more useful extraction.")
 
-    tab1, tab2 = st.tabs(["📤 Upload & Process", "📊 Model Evaluation"])
+    tab1, tab2, tab3 = st.tabs(["📤 Upload & Process", "🗂 Document Repository", "📊 Model Evaluation"])
     with tab1:
         render_upload_tab()
     with tab2:
+        render_repository_tab()
+    with tab3:
         render_evaluation_tab()
 
 
