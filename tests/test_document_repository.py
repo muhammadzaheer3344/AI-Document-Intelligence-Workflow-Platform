@@ -1,8 +1,10 @@
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
-from src.document_repository import DocumentRepository, DuplicateDocumentError
+from src.document_repository import DocumentRepository, DuplicateDocumentError, WorkflowTransitionError
+from src.workflow import process_batch
 
 
 class DocumentRepositoryTests(unittest.TestCase):
@@ -51,9 +53,60 @@ class DocumentRepositoryTests(unittest.TestCase):
         )
         self.assertEqual(len(self.repository.list_documents(search="Northwind")), 1)
         self.assertEqual(len(self.repository.list_documents(document_type="Invoice", status="Needs Review")), 1)
-        self.assertEqual(self.repository.update_document(first["id"], status="Processed")["status"], "Processed")
+        with self.assertRaises(WorkflowTransitionError):
+            self.repository.transition_document(first["id"], "Completed", action="Invalid completion")
+        approved = self.repository.transition_document(first["id"], "Approved", action="Approved", reviewer_note="Verified")
+        completed = self.repository.transition_document(approved["id"], "Completed", action="Completed")
+        self.assertEqual(completed["status"], "Completed")
+        history = self.repository.list_audit_events(first["id"])
+        self.assertEqual([event["action"] for event in history[:2]], ["Completed", "Approved"])
+        self.assertEqual(history[1]["reason"], "Verified")
         self.assertTrue(self.repository.delete_document(first["id"]))
         self.assertIsNone(self.repository.get_document(first["id"]))
+
+    def test_week_four_status_is_migrated_and_audited(self):
+        document = self.repository.create_document(
+            file_bytes=b"legacy invoice", original_filename="legacy.pdf",
+            document_type="Invoice", status="Completed",
+        )
+        connection = self.repository._connect()
+        with connection:
+            connection.execute("UPDATE documents SET status = 'Processed' WHERE id = ?", (document["id"],))
+            connection.execute("DELETE FROM audit_events WHERE document_id = ?", (document["id"],))
+        connection.close()
+
+        migrated_repository = DocumentRepository(self.repository.db_path, self.repository.storage_root)
+        migrated = migrated_repository.get_document(document["id"])
+        self.assertEqual(migrated["status"], "Completed")
+        event = migrated_repository.list_audit_events(document["id"])[0]
+        self.assertEqual(event["action"], "Week 5 migration")
+        self.assertEqual(event["previous_status"], "Processed")
+
+    def test_mixed_batch_keeps_processing_after_one_document_fails(self):
+        valid_fields = {
+            "Invoice Number": "INV-9", "Date": "2026-09-01",
+            "Company Name": "Acme", "Total Amount": "$99.00",
+        }
+        documents = [
+            self.repository.create_document(
+                file_bytes=f"batch-{index}".encode(), original_filename=f"invoice-{index}.pdf",
+                document_type="Invoice", status="New", fields=valid_fields,
+            )
+            for index in range(3)
+        ]
+        original_transition = self.repository.transition_document
+
+        def fail_second_start(document_id, new_status, **kwargs):
+            if document_id == documents[1]["id"] and new_status == "Processing":
+                raise OSError("simulated per-document failure")
+            return original_transition(document_id, new_status, **kwargs)
+
+        with patch.object(self.repository, "transition_document", side_effect=fail_second_start):
+            results = process_batch(self.repository, [document["id"] for document in documents])
+
+        self.assertEqual([result["Result"] for result in results], ["Completed", "Failed", "Completed"])
+        self.assertEqual(self.repository.get_document(documents[2]["id"])["status"], "Completed")
+        self.assertEqual(self.repository.list_audit_events(documents[1]["id"])[0]["action"], "Batch processing failed")
 
 
 if __name__ == "__main__":

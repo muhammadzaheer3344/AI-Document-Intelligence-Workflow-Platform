@@ -29,6 +29,7 @@ from src.extract_text import extract_text
 from src.field_extraction import extract_fields, get_missing_fields
 from src.preprocess import clean_text, is_usable, normalize_for_classification
 from src.document_repository import DuplicateDocumentError, DocumentRepository
+from src.workflow import LOW_CONFIDENCE_THRESHOLD, decide_next_action, process_batch
 
 ROOT = Path(__file__).resolve().parent
 MODELS_DIR = ROOT / "models"
@@ -102,8 +103,13 @@ def render_upload_tab() -> None:
         for w in extraction.warnings:
             st.warning(w)
         try:
-            repository.create_document(file_bytes=file_bytes, original_filename=uploaded_file.name,
-                                       document_type="Other", status="Failed")
+            saved = repository.create_document(file_bytes=file_bytes, original_filename=uploaded_file.name,
+                                               document_type="Other", status="New",
+                                               workflow_reason="Document text could not be extracted.",
+                                               validation_errors={"Readable text": "Document text could not be extracted."})
+            repository.transition_document(saved["id"], "Processing", action="Processing started")
+            repository.transition_document(saved["id"], "Failed", action="Processing failed",
+                                           reason="Document text could not be extracted.")
         except Exception:
             st.error("The failed upload could not be saved to the document repository.")
         return
@@ -132,8 +138,15 @@ def render_upload_tab() -> None:
             st.text_area("Raw text", cleaned or "(empty)", height=150, label_visibility="collapsed")
         try:
             saved = repository.create_document(file_bytes=file_bytes, original_filename=uploaded_file.name,
-                                               document_type="Other", status="Needs Review",
-                                               text_preview=cleaned)
+                                               document_type="Other", status="New", text_preview=cleaned,
+                                               workflow_reason="Very little readable text was found.",
+                                               validation_errors={"Readable text": "No usable text could be extracted."})
+            repository.transition_document(saved["id"], "Processing", action="Processing started")
+            saved = repository.transition_document(
+                saved["id"], "Needs Review", action="Automated review required",
+                reason="Very little readable text was found.",
+                validation_errors={"Readable text": "No usable text could be extracted."},
+            )
             st.info(f"Saved as document #{saved['id']} with status Needs Review.")
         except Exception:
             st.error("The document could not be saved to the repository.")
@@ -142,12 +155,22 @@ def render_upload_tab() -> None:
     normalized = normalize_for_classification(cleaned)
     classification = classify_document(cleaned, normalized)
     fields = extract_fields(cleaned, classification.label)
+    decision = decide_next_action(classification.label, fields, classification.confidence)
     missing = get_missing_fields(fields)
-    status = "Needs Review" if missing else "Processed"
     try:
-        saved = repository.create_document(file_bytes=file_bytes, original_filename=uploaded_file.name,
-                                           document_type=classification.label, status=status,
-                                           fields=fields, text_preview=cleaned)
+        saved = repository.create_document(
+            file_bytes=file_bytes, original_filename=uploaded_file.name,
+            document_type=classification.label, status="New", fields=fields,
+            text_preview=cleaned, predicted_type=classification.label,
+            confidence=classification.confidence, validation_errors=decision.validation_errors,
+            workflow_reason=decision.reason,
+        )
+        repository.transition_document(saved["id"], "Processing", action="Processing started")
+        saved = repository.transition_document(
+            saved["id"], decision.action, action="Automated workflow decision",
+            reason=decision.reason, validation_errors=decision.validation_errors,
+        )
+        status = saved["status"]
         st.success(f"Saved as document #{saved['id']} with status {status}.")
     except DuplicateDocumentError as duplicate:
         st.info(f"Duplicate detected. This file is already saved as document #{duplicate.document['id']}.")
@@ -224,6 +247,17 @@ def render_evaluation_tab() -> None:
 def render_document_detail(document: dict) -> None:
     st.markdown(f"### Document #{document['id']}: {document['original_filename']}")
     st.write(f"**Type:** {document['document_type']}  |  **Status:** {document['status']}")
+    confidence = document.get("confidence")
+    confidence_label = f"{confidence:.1%}" if confidence is not None else "Not provided"
+    st.write(f"**Predicted type:** {document.get('predicted_type') or document['document_type']}  |  **Confidence:** " + confidence_label)
+    if document.get("workflow_reason"):
+        st.write(f"**Workflow reason:** {document['workflow_reason']}")
+    validation_errors = document.get("validation_errors") or {}
+    if validation_errors:
+        st.markdown("**Validation results**")
+        st.table({"Field": list(validation_errors), "Failure": list(validation_errors.values())})
+    elif document.get("document_type") in {"Invoice", "Resume"}:
+        st.success("Validation passed.")
     st.write(f"**Uploaded:** {document['upload_date']}  |  **SHA-256:** `{document['file_hash']}`")
     st.write(f"**Stored path:** `{document['file_path']}`")
     fields = document.get("extracted_fields") or {}
@@ -233,6 +267,15 @@ def render_document_detail(document: dict) -> None:
     path = Path(document["file_path"])
     if path.is_file():
         st.download_button("Download document", path.read_bytes(), file_name=document["original_filename"])
+    events = get_repository().list_audit_events(document["id"])
+    with st.expander("Workflow audit history", expanded=False):
+        if events:
+            st.dataframe(events, use_container_width=True, hide_index=True)
+        else:
+            st.info("No workflow history is available.")
+    if document["status"] == "Approved" and st.button("Mark workflow complete", key=f"complete_{document['id']}"):
+        get_repository().transition_document(document["id"], "Completed", action="Workflow completed")
+        st.rerun()
 
 
 def render_repository_tab() -> None:
@@ -244,7 +287,7 @@ def render_repository_tab() -> None:
     with col2:
         document_type = st.selectbox("Document type", ["All", "Invoice", "Resume", "Other"], key="repository_type")
     with col3:
-        status = st.selectbox("Processing status", ["All", "Processed", "Needs Review", "Failed"], key="repository_status")
+        status = st.selectbox("Workflow status", ["All", "New", "Processing", "Needs Review", "Approved", "Rejected", "Completed", "Failed"], key="repository_status")
     date_col1, date_col2, date_col3 = st.columns([1, 1, 1])
     with date_col1:
         start_date = st.date_input("Uploaded from", value=None, key="repository_start_date")
@@ -274,9 +317,91 @@ def render_repository_tab() -> None:
     if not documents:
         st.info("No documents match the current filters.")
         return
+    st.dataframe([
+        {"ID": doc["id"], "Filename": doc["original_filename"], "Type": doc["document_type"],
+         "Status": doc["status"], "Latest action": doc.get("latest_workflow_action"),
+         "Action time": doc.get("latest_workflow_timestamp")}
+        for doc in documents
+    ], use_container_width=True, hide_index=True)
     options = {f"#{doc['id']} · {doc['original_filename']} · {doc['status']}": doc for doc in documents}
     selected_label = st.selectbox("Select a document", list(options))
     render_document_detail(options[selected_label])
+
+
+def render_workflow_dashboard() -> None:
+    repository = get_repository()
+    metrics = repository.get_metrics()
+    statuses = metrics["statuses"]
+    st.subheader("Workflow metrics")
+    metric_columns = st.columns(6)
+    for column, label, value in zip(
+        metric_columns,
+        ("Total documents", "Completed", "Needs review", "Approved", "Rejected", "Failed"),
+        (metrics["total"], statuses.get("Completed", 0), statuses.get("Needs Review", 0),
+         statuses.get("Approved", 0), statuses.get("Rejected", 0), statuses.get("Failed", 0)),
+    ):
+        column.metric(label, value)
+    st.markdown("#### Documents by type")
+    if metrics["by_type"]:
+        st.bar_chart(metrics["by_type"])
+    else:
+        st.info("Document type metrics will appear after the first upload.")
+    st.caption(f"Low-confidence review threshold: {LOW_CONFIDENCE_THRESHOLD:.0%}. Confidence is only used when provided by the classifier.")
+
+    st.markdown("#### Batch workflow processing")
+    eligible = [doc for doc in repository.list_documents() if doc["status"] in {"New", "Needs Review", "Failed"}]
+    choices = {f"#{doc['id']} · {doc['original_filename']} · {doc['status']}": doc for doc in eligible}
+    selected = st.multiselect("Select stored documents", list(choices), key="batch_documents")
+    if st.button("Run workflow on selected", disabled=not selected):
+        results = process_batch(repository, [choices[label]["id"] for label in selected])
+        counts = {result: sum(item["Result"] == result for item in results)
+                  for result in ("Completed", "Needs Review", "Failed")}
+        st.success(
+            f"Batch finished: {counts['Completed']} completed, "
+            f"{counts['Needs Review']} sent to review, {counts['Failed']} failed."
+        )
+        st.dataframe(results, use_container_width=True, hide_index=True)
+
+
+def render_review_queue() -> None:
+    repository = get_repository()
+    documents = repository.list_documents(status="Needs Review")
+    st.subheader("Human review queue")
+    st.caption(f"{len(documents)} document(s) require attention")
+    if not documents:
+        st.success("The review queue is empty.")
+        return
+    st.dataframe([
+        {"ID": doc["id"], "Filename": doc["original_filename"], "Type": doc["document_type"],
+         "Status": doc["status"], "Reason": doc.get("workflow_reason") or "Review required"}
+        for doc in documents
+    ], use_container_width=True, hide_index=True)
+    options = {f"#{doc['id']} · {doc['original_filename']}": doc for doc in documents}
+    selected = st.selectbox("Document to review", list(options), key="review_document")
+    document = options[selected]
+    render_document_detail(document)
+    reviewer_note = st.text_area("Reviewer note", max_chars=500, key=f"review_note_{document['id']}")
+    approve_col, reject_col = st.columns(2)
+    if approve_col.button("Approve", key=f"approve_{document['id']}"):
+        repository.transition_document(
+            document["id"], "Approved", action="Reviewer approved",
+            reviewer_note=reviewer_note.strip(),
+        )
+        st.success("Document approved and audit history updated.")
+        st.rerun()
+    rejection_reason = reject_col.text_input(
+        "Rejection reason (required)", max_chars=500, key=f"reject_reason_{document['id']}"
+    )
+    if reject_col.button("Reject", key=f"reject_{document['id']}"):
+        if not rejection_reason.strip():
+            st.error("Enter a short rejection reason before rejecting this document.")
+        else:
+            repository.transition_document(
+                document["id"], "Rejected", action="Reviewer rejected",
+                reviewer_note=rejection_reason.strip(),
+            )
+            st.success("Document rejected and audit history updated.")
+            st.rerun()
 
 
 def main() -> None:
@@ -284,12 +409,19 @@ def main() -> None:
     st.caption("Improved document understanding: cleaner text, more reliable "
                "classification, more useful extraction.")
 
-    tab1, tab2, tab3 = st.tabs(["📤 Upload & Process", "🗂 Document Repository", "📊 Model Evaluation"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📤 Upload & Process", "📈 Workflow", "🧑‍⚖️ Review Queue",
+        "🗂 Document Repository", "📊 Model Evaluation",
+    ])
     with tab1:
         render_upload_tab()
     with tab2:
-        render_repository_tab()
+        render_workflow_dashboard()
     with tab3:
+        render_review_queue()
+    with tab4:
+        render_repository_tab()
+    with tab5:
         render_evaluation_tab()
 
 
