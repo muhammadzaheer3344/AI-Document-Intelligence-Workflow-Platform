@@ -53,7 +53,6 @@ def load_model_metadata() -> dict | None:
     return None
 
 
-@st.cache_resource
 def get_repository() -> DocumentRepository:
     return DocumentRepository(DB_PATH, STORAGE_ROOT)
 
