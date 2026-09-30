@@ -78,3 +78,20 @@ def process_batch(repository: Any, document_ids: list[int]) -> list[dict[str, An
                 pass
             results.append({"Document": filename, "Result": "Failed", "Reason": str(exc)})
     return results
+
+
+def get_workflow_metrics(repository: Any) -> dict[str, Any]:
+    """Read metrics from current repositories or older Week 4 repository objects."""
+    get_metrics = getattr(repository, "get_metrics", None)
+    if callable(get_metrics):
+        return get_metrics()
+
+    documents = repository.list_documents()
+    statuses: dict[str, int] = {}
+    by_type: dict[str, int] = {}
+    for document in documents:
+        status = document["status"]
+        document_type = document["document_type"]
+        statuses[status] = statuses.get(status, 0) + 1
+        by_type[document_type] = by_type.get(document_type, 0) + 1
+    return {"total": len(documents), "statuses": statuses, "by_type": by_type}

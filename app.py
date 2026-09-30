@@ -29,7 +29,7 @@ from src.extract_text import extract_text
 from src.field_extraction import extract_fields, get_missing_fields
 from src.preprocess import clean_text, is_usable, normalize_for_classification
 from src.document_repository import DuplicateDocumentError, DocumentRepository
-from src.workflow import LOW_CONFIDENCE_THRESHOLD, decide_next_action, process_batch
+from src.workflow import LOW_CONFIDENCE_THRESHOLD, decide_next_action, get_workflow_metrics, process_batch
 
 ROOT = Path(__file__).resolve().parent
 MODELS_DIR = ROOT / "models"
@@ -330,7 +330,7 @@ def render_repository_tab() -> None:
 
 def render_workflow_dashboard() -> None:
     repository = get_repository()
-    metrics = repository.get_metrics()
+    metrics = get_workflow_metrics(repository)
     statuses = metrics["statuses"]
     st.subheader("Workflow metrics")
     metric_columns = st.columns(6)

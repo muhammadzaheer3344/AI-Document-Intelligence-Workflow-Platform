@@ -1,6 +1,6 @@
 import unittest
 
-from src.workflow import LOW_CONFIDENCE_THRESHOLD, decide_next_action
+from src.workflow import LOW_CONFIDENCE_THRESHOLD, decide_next_action, get_workflow_metrics
 from src.validator import validate_fields
 
 
@@ -78,6 +78,33 @@ class WorkflowTests(unittest.TestCase):
         ]
         expected = [expected for _, _, _, _, _, expected in scenarios]
         self.assertEqual(actual, expected, [name for name, *_ in scenarios])
+
+    def test_metrics_fallback_supports_week_four_repository(self):
+        class WeekFourRepository:
+            def list_documents(self):
+                return [
+                    {"status": "Completed", "document_type": "Invoice"},
+                    {"status": "Needs Review", "document_type": "Invoice"},
+                    {"status": "Completed", "document_type": "Resume"},
+                ]
+
+        self.assertEqual(get_workflow_metrics(WeekFourRepository()), {
+            "total": 3,
+            "statuses": {"Completed": 2, "Needs Review": 1},
+            "by_type": {"Invoice": 2, "Resume": 1},
+        })
+
+    def test_metrics_use_repository_aggregate_when_available(self):
+        class CurrentRepository:
+            def get_metrics(self):
+                return {"total": 0, "statuses": {}, "by_type": {}}
+
+            def list_documents(self):
+                raise AssertionError("fallback should not be used")
+
+        self.assertEqual(get_workflow_metrics(CurrentRepository()), {
+            "total": 0, "statuses": {}, "by_type": {},
+        })
 
 
 if __name__ == "__main__":
