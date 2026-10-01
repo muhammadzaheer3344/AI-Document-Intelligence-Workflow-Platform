@@ -40,6 +40,17 @@ def decide_next_action(
     return WorkflowDecision("Completed", "Required fields passed validation and workflow rules.", errors)
 
 
+def require_human_review(decision: WorkflowDecision) -> WorkflowDecision:
+    """Keep uploaded documents in the human queue even when automated checks pass."""
+    if decision.action == "Needs Review":
+        return decision
+    return WorkflowDecision(
+        "Needs Review",
+        f"{decision.reason} Human review is required before completion.",
+        decision.validation_errors,
+    )
+
+
 def process_batch(repository: Any, document_ids: list[int]) -> list[dict[str, Any]]:
     """Process each stored document independently and return one result per ID."""
     results: list[dict[str, Any]] = []

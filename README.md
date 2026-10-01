@@ -122,7 +122,7 @@ The app has five tabs:
 
 ## Week 5 Workflow Details
 
-New uploads pass through `New` → `Processing` → `Completed`, `Needs Review`, or `Failed`. Reviewers can move `Needs Review` documents to `Approved` or `Rejected`; approved documents can then be marked `Completed`. Invalid transitions are rejected by the repository API. Failed documents may be retried through the batch workflow.
+New uploads pass through `New` → `Processing` → `Needs Review` so every saved document appears in the human review queue, even when automated validation passes. Extraction failures that can be saved also enter `Needs Review` with a readable-text validation error. Reviewers can move documents to `Approved` or `Rejected`; approved documents can then be marked `Completed`. Batch processing can re-run rules and complete valid documents. Invalid transitions are rejected by the repository API.
 
 The validator requires Invoice Number, Date, Company Name, and Total Amount for invoices, and Name, Email, and Skills for resumes. It also validates present email, phone, date, and amount values. Every failure is stored by field name. Classifications below 55% confidence are sent for review only when the classifier actually provides a confidence score; rule-based classifications do not receive an invented score.
 
@@ -147,7 +147,7 @@ Full pipeline tested against all fixtures in `sample_docs/`:
 
 The workflow unit suite also exercises a 12-case decision matrix: native and OCR-style invoices, multiple amount/date formats, missing invoice fields, invalid date/amount, complete resumes with and without confidence, invalid email, missing skills, low confidence, and an unreadable scan. Repository tests cover duplicate detection, legal and illegal state changes, reviewer audit notes, migration from the Week 4 `Processed` status, mixed-success batch continuation, and independent database-backed search/update/delete behavior.
 
-Run the automated suite with `python -m unittest discover -s tests -p "test_*.py"`. The Week 5 suite currently contains 14 passing tests. The UI should also be exercised locally for approve/reject and batch interactions before submission; screenshots are not committed in this repository.
+Run the automated suite with `python -m unittest discover -s tests -p "test_*.py"`. The Week 5 suite currently contains 18 passing tests, including tests that verify valid uploads are still sent for human review. The UI should also be exercised locally for approve/reject and batch interactions before submission; screenshots are not committed in this repository.
 
 ---
 

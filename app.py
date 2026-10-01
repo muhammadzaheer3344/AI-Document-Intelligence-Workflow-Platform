@@ -29,7 +29,13 @@ from src.extract_text import extract_text
 from src.field_extraction import extract_fields, get_missing_fields
 from src.preprocess import clean_text, is_usable, normalize_for_classification
 from src.document_repository import DuplicateDocumentError, DocumentRepository
-from src.workflow import LOW_CONFIDENCE_THRESHOLD, decide_next_action, get_workflow_metrics, process_batch
+from src.workflow import (
+    LOW_CONFIDENCE_THRESHOLD,
+    decide_next_action,
+    get_workflow_metrics,
+    process_batch,
+    require_human_review,
+)
 
 ROOT = Path(__file__).resolve().parent
 MODELS_DIR = ROOT / "models"
@@ -73,7 +79,7 @@ def confidence_badge(confidence: float | None) -> str:
 def render_upload_tab() -> None:
     st.subheader("Upload a document")
     st.caption("Supported formats: PDF, JPG, JPEG, PNG. Scanned/photographed documents are "
-               "handled automatically via OCR.")
+               "handled automatically via OCR. Every saved upload is added to the Review Queue.")
 
     uploaded_file = st.file_uploader("Choose a file", type=SUPPORTED_TYPES)
 
@@ -98,7 +104,7 @@ def render_upload_tab() -> None:
         extraction = extract_text(file_bytes, file_ext)
 
     if not extraction.success:
-        st.error("Could not process this file.")
+        st.warning("Automatic extraction failed. The saved document will be sent to the review queue.")
         for w in extraction.warnings:
             st.warning(w)
         try:
@@ -107,8 +113,12 @@ def render_upload_tab() -> None:
                                                workflow_reason="Document text could not be extracted.",
                                                validation_errors={"Readable text": "Document text could not be extracted."})
             repository.transition_document(saved["id"], "Processing", action="Processing started")
-            repository.transition_document(saved["id"], "Failed", action="Processing failed",
-                                           reason="Document text could not be extracted.")
+            saved = repository.transition_document(
+                saved["id"], "Needs Review", action="Extraction requires human review",
+                reason="Document text could not be extracted.",
+                validation_errors={"Readable text": "Document text could not be extracted."},
+            )
+            st.info(f"Saved as document #{saved['id']} with status Needs Review.")
         except Exception:
             st.error("The failed upload could not be saved to the document repository.")
         return
@@ -155,19 +165,20 @@ def render_upload_tab() -> None:
     classification = classify_document(cleaned, normalized)
     fields = extract_fields(cleaned, classification.label)
     decision = decide_next_action(classification.label, fields, classification.confidence)
+    upload_decision = require_human_review(decision)
     missing = get_missing_fields(fields)
     try:
         saved = repository.create_document(
             file_bytes=file_bytes, original_filename=uploaded_file.name,
             document_type=classification.label, status="New", fields=fields,
             text_preview=cleaned, predicted_type=classification.label,
-            confidence=classification.confidence, validation_errors=decision.validation_errors,
-            workflow_reason=decision.reason,
+            confidence=classification.confidence, validation_errors=upload_decision.validation_errors,
+            workflow_reason=upload_decision.reason,
         )
         repository.transition_document(saved["id"], "Processing", action="Processing started")
         saved = repository.transition_document(
-            saved["id"], decision.action, action="Automated workflow decision",
-            reason=decision.reason, validation_errors=decision.validation_errors,
+            saved["id"], upload_decision.action, action="Upload routed to human review",
+            reason=upload_decision.reason, validation_errors=upload_decision.validation_errors,
         )
         status = saved["status"]
         st.success(f"Saved as document #{saved['id']} with status {status}.")

@@ -1,6 +1,6 @@
 import unittest
 
-from src.workflow import LOW_CONFIDENCE_THRESHOLD, decide_next_action, get_workflow_metrics
+from src.workflow import LOW_CONFIDENCE_THRESHOLD, decide_next_action, get_workflow_metrics, require_human_review
 from src.validator import validate_fields
 
 
@@ -33,6 +33,24 @@ class WorkflowTests(unittest.TestCase):
     def test_valid_resume_completes(self):
         decision = decide_next_action("Resume", {"Name": "Ada Lovelace", "Email": "ada@example.com", "Skills": "Python"})
         self.assertEqual(decision.action, "Completed")
+
+    def test_valid_upload_is_held_for_human_review(self):
+        automated = decide_next_action("Resume", {
+            "Name": "Ada Lovelace", "Email": "ada@example.com", "Skills": "Python",
+        })
+        upload = require_human_review(automated)
+        self.assertEqual(upload.action, "Needs Review")
+        self.assertIn("Human review is required", upload.reason)
+        self.assertEqual(upload.validation_errors, {})
+
+    def test_existing_review_reason_and_failures_are_preserved(self):
+        automated = decide_next_action("Resume", {
+            "Name": "Ada Lovelace", "Email": "invalid", "Skills": "Python",
+        })
+        upload = require_human_review(automated)
+        self.assertEqual(upload.action, "Needs Review")
+        self.assertEqual(upload.reason, automated.reason)
+        self.assertEqual(upload.validation_errors, {"Email": "Email format is invalid."})
 
     def test_low_confidence_routes_to_review(self):
         fields = {"Name": "Ada Lovelace", "Email": "ada@example.com", "Skills": "Python"}
