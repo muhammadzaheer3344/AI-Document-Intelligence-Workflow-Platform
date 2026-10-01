@@ -91,7 +91,7 @@ def render_upload_tab() -> None:
     existing = repository.get_by_hash(repository.hash_bytes(file_bytes))
     if existing:
         st.info(f"Duplicate detected. This file is already saved as document #{existing['id']}.")
-        render_document_detail(existing)
+        render_document_detail(existing, key_prefix="upload_duplicate")
         return
 
     with st.spinner("Reading document (extracting text, running OCR if needed)…"):
@@ -243,7 +243,7 @@ def render_evaluation_tab() -> None:
         st.info("Evaluation report not found — re-run training to generate it.")
 
 
-def render_document_detail(document: dict) -> None:
+def render_document_detail(document: dict, *, key_prefix: str) -> None:
     st.markdown(f"### Document #{document['id']}: {document['original_filename']}")
     st.write(f"**Type:** {document['document_type']}  |  **Status:** {document['status']}")
     confidence = document.get("confidence")
@@ -262,17 +262,28 @@ def render_document_detail(document: dict) -> None:
     fields = document.get("extracted_fields") or {}
     if fields:
         st.table({"Field": list(fields.keys()), "Value": list(fields.values())})
-    st.text_area("Text preview", document.get("text_preview") or "(empty)", height=180, disabled=True)
+    st.text_area(
+        "Text preview", document.get("text_preview") or "(empty)", height=180,
+        disabled=True, key=f"{key_prefix}_text_preview_{document['id']}",
+    )
     path = Path(document["file_path"])
     if path.is_file():
-        st.download_button("Download document", path.read_bytes(), file_name=document["original_filename"])
+        st.download_button(
+            "Download document", path.read_bytes(), file_name=document["original_filename"],
+            key=f"{key_prefix}_download_{document['id']}",
+        )
     events = get_repository().list_audit_events(document["id"])
-    with st.expander("Workflow audit history", expanded=False):
-        if events:
-            st.dataframe(events, use_container_width=True, hide_index=True)
-        else:
-            st.info("No workflow history is available.")
-    if document["status"] == "Approved" and st.button("Mark workflow complete", key=f"complete_{document['id']}"):
+    st.markdown("#### Workflow audit history")
+    if events:
+        st.dataframe(
+            events, use_container_width=True, hide_index=True,
+            key=f"{key_prefix}_audit_{document['id']}",
+        )
+    else:
+        st.info("No workflow history is available.")
+    if document["status"] == "Approved" and st.button(
+        "Mark workflow complete", key=f"{key_prefix}_complete_{document['id']}"
+    ):
         get_repository().transition_document(document["id"], "Completed", action="Workflow completed")
         st.rerun()
 
@@ -324,7 +335,7 @@ def render_repository_tab() -> None:
     ], use_container_width=True, hide_index=True)
     options = {f"#{doc['id']} · {doc['original_filename']} · {doc['status']}": doc for doc in documents}
     selected_label = st.selectbox("Select a document", list(options))
-    render_document_detail(options[selected_label])
+    render_document_detail(options[selected_label], key_prefix="repository")
 
 
 def render_workflow_dashboard() -> None:
@@ -378,7 +389,7 @@ def render_review_queue() -> None:
     options = {f"#{doc['id']} · {doc['original_filename']}": doc for doc in documents}
     selected = st.selectbox("Document to review", list(options), key="review_document")
     document = options[selected]
-    render_document_detail(document)
+    render_document_detail(document, key_prefix="review")
     reviewer_note = st.text_area("Reviewer note", max_chars=500, key=f"review_note_{document['id']}")
     approve_col, reject_col = st.columns(2)
     if approve_col.button("Approve", key=f"approve_{document['id']}"):
