@@ -7,9 +7,11 @@ from typing import Any
 
 from src.validator import validate_fields
 
-# Classifications below this value are routed for human review only when the
-# classifier supplied a real confidence score.
-LOW_CONFIDENCE_THRESHOLD = 0.55
+# Read from config so the threshold can be overridden via environment variable.
+try:
+    from src.config import LOW_CONFIDENCE_THRESHOLD
+except Exception:
+    LOW_CONFIDENCE_THRESHOLD = 0.55
 
 
 @dataclass(frozen=True)
